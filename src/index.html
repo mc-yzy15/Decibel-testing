@@ -1,39 +1,41 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tauri App</title>
+    <title>分贝检测仪</title>
     <script type="module" src="/main.js" defer></script>
   </head>
 
   <body>
     <main class="container">
-      <h1>Welcome to Tauri</h1>
+      <h1>分贝检测仪</h1>
 
-      <div class="row">
-        <a href="https://tauri.app" target="_blank">
-          <img src="/assets/tauri.svg" class="logo tauri" alt="Tauri logo" />
-        </a>
-        <a
-          href="https://developer.mozilla.org/en-US/docs/Web/JavaScript"
-          target="_blank"
-        >
-          <img
-            src="/assets/javascript.svg"
-            class="logo vanilla"
-            alt="JavaScript logo"
-          />
-        </a>
+      <div class="decibel-meter">
+        <div class="meter-container">
+          <div id="meter" class="meter">
+            <div id="needle" class="needle"></div>
+          </div>
+        </div>
+        <div class="decibel-value" id="decibel-value">0 dB</div>
+        <div class="noise-level" id="noise-level">安静</div>
       </div>
-      <p>Click on the Tauri logo to learn more about the framework</p>
 
-      <form class="row" id="greet-form">
-        <input id="greet-input" placeholder="Enter a name..." />
-        <button type="submit">Greet</button>
-      </form>
-      <p id="greet-msg"></p>
+      <div class="controls">
+        <button id="start-btn" class="btn-primary">开始检测</button>
+        <button id="stop-btn" class="btn-secondary" disabled>停止检测</button>
+      </div>
+
+      <div class="info-card">
+        <h3>噪音健康建议</h3>
+        <p id="health-advice">点击开始检测按钮开始监测环境噪音。</p>
+      </div>
+
+      <footer>
+        <p>使用 Tauri 开发的开源分贝检测仪</p>
+        <p><a href="https://github.com/mc-yzy15/Decibel-testing" target="_blank">GitHub 仓库</a></p>
+      </footer>
     </main>
   </body>
 </html>
