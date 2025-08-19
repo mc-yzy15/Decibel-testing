@@ -1,13 +1,10 @@
 name: Decibel-testing 全自动CI/CD Pipeline
 
 on:
-  # 主分支推送触发正式版本构建
+  # 推送事件触发构建
   push:
-    branches: [main]
+    branches: [main, dev]
     tags: ['v*.*.*']  # 支持通过标签触发特定版本构建
-  # 开发分支触发开发版本构建
-  push:
-    branches: [dev]
   # Pull Request触发测试构建
   pull_request:
     branches: [main, dev]
@@ -15,7 +12,7 @@ on:
   schedule:
     - cron: '0 0 * * *'  # 每天凌晨0点触发
   # 手动触发选项（保留但不作为主要触发方式）
-  workflow_dispatch: {
+  workflow_dispatch: {}
 
 
 jobs:
@@ -73,50 +70,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.0-dev build-essential curl wget libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
 
-          # 自动生成版本号
-      - name: Generate version number
-        id: versioning
-        run: |
-          # 从Cargo.toml获取基础版本号
-          BASE_VERSION=$(grep -m 1 "version =" src-tauri/Cargo.toml | sed 's/version = "//g' | sed 's/"//g')
-          
-          # 根据触发事件生成不同的版本后缀
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
-            # 夜间构建：添加日期时间后缀
-            TIMESTAMP=$(date -u +"%Y%m%d%H%M%S")
-            VERSION="${BASE_VERSION}-nightly.${TIMESTAMP}"
-            TAG="nightly-${TIMESTAMP}"
-          elif [[ "${{ github.ref }}" == "refs/heads/dev" ]]; then
-            # 开发分支：添加dev后缀和提交计数
-            COMMIT_COUNT=$(git rev-list --count HEAD)
-            SHORT_SHA=$(git rev-parse --short HEAD)
-            VERSION="${BASE_VERSION}-dev.${COMMIT_COUNT}+${SHORT_SHA}"
-            TAG="dev-${COMMIT_COUNT}-${SHORT_SHA}"
-          elif [[ "${{ startsWith(github.ref, 'refs/tags/v') }}" == "true" ]]; then
-            # 标签触发：使用标签作为版本
-            VERSION=$(echo "${{ github.ref }}" | sed 's/refs\/tags\///')
-            TAG=${VERSION}
-          else
-            # 主分支：正式版本
-            VERSION=${BASE_VERSION}
-            TAG="v${BASE_VERSION}"
-          fi
-          
-          # 设置输出变量供后续步骤使用
-          echo "VERSION=${VERSION}" >> $GITHUB_ENV
-          echo "TAG=${TAG}" >> $GITHUB_ENV
-          echo "::set-output name=version::${VERSION}"
-          echo "::set-output name=tag::${TAG}"
-        shell: bash
-
-      # 安装依赖并构建项目（使用生成的版本号）
+      # 安装依赖并构建项目
       - name: Install dependencies and build
         run: |
           npm install
           npm run build  # 确保前端构建
           cd src-tauri
-          # 使用生成的版本号进行构建
-          cargo build --release --target ${{ matrix.platform.target }} --features "tauri/version-${{ env.VERSION }}"
+          cargo build --release --target ${{ matrix.platform.target }}
 
       # 打包和上传构建产物
       - name: Package and upload artifacts
@@ -129,9 +89,72 @@ jobs:
             ${{ matrix.platform.os == 'macos-latest' && 'src-tauri/target/${{ matrix.platform.target }}/release/decibel-testing.app' || '' }}
           if-no-files-found: error
 
+  # 通用发布任务（所有类型的发布都依赖此步骤获取版本信息）
+  get-version-info:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取完整的提交历史
+
+      - name: Generate version information
+        id: version_info
+        run: |
+          # 从Cargo.toml获取基础版本号
+          BASE_VERSION=$(grep -m 1 "version =" src-tauri/Cargo.toml | sed 's/version = "//g' | sed 's/"//g')
+          
+          # 根据触发事件生成不同的版本后缀
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            # 夜间构建：添加日期时间后缀
+            TIMESTAMP=$(date -u +"%Y%m%d%H%M%S")
+            VERSION="${BASE_VERSION}-nightly.${TIMESTAMP}"
+            TAG="nightly-${TIMESTAMP}"
+            RELEASE_NAME="Nightly Build ${TIMESTAMP}"
+            IS_PRERELEASE=true
+            RELEASE_BODY="Automated nightly build from main branch"
+          elif [[ "${{ github.ref }}" == "refs/heads/dev" ]]; then
+            # 开发分支：添加dev后缀和提交计数
+            COMMIT_COUNT=$(git rev-list --count HEAD)
+            SHORT_SHA=$(git rev-parse --short HEAD)
+            VERSION="${BASE_VERSION}-dev.${COMMIT_COUNT}+${SHORT_SHA}"
+            TAG="dev-${COMMIT_COUNT}-${SHORT_SHA}"
+            RELEASE_NAME="Development Build ${COMMIT_COUNT}-${SHORT_SHA}"
+            IS_PRERELEASE=true
+            RELEASE_BODY="Automated development build from dev branch"
+          elif [[ "${{ startsWith(github.ref, 'refs/tags/v') }}" == "true" ]]; then
+            # 标签触发：使用标签作为版本
+            TAG_NAME=$(echo "${{ github.ref }}" | sed 's/refs\/tags\///')
+            VERSION=${TAG_NAME}
+            TAG=${TAG_NAME}
+            RELEASE_NAME="Version ${TAG_NAME}"
+            IS_PRERELEASE=false
+            RELEASE_BODY="Official release build"
+          else
+            # 主分支：正式版本
+            VERSION=${BASE_VERSION}
+            TAG="v${BASE_VERSION}"
+            RELEASE_NAME="Version ${BASE_VERSION}"
+            IS_PRERELEASE=false
+            RELEASE_BODY="Official release build from main branch"
+          fi
+          
+          # 设置输出变量供后续步骤使用
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          echo "TAG=${TAG}" >> $GITHUB_OUTPUT
+          echo "RELEASE_NAME=${RELEASE_NAME}" >> $GITHUB_OUTPUT
+          echo "IS_PRERELEASE=${IS_PRERELEASE}" >> $GITHUB_OUTPUT
+          echo "RELEASE_BODY=${RELEASE_BODY}" >> $GITHUB_OUTPUT
+        shell: bash
+    outputs:
+      version: ${{ steps.version_info.outputs.VERSION }}
+      tag: ${{ steps.version_info.outputs.TAG }}
+      release_name: ${{ steps.version_info.outputs.RELEASE_NAME }}
+      is_prerelease: ${{ steps.version_info.outputs.IS_PRERELEASE }}
+      release_body: ${{ steps.version_info.outputs.RELEASE_BODY }}
+
   # 夜间构建特定任务
   nightly-release:
-    needs: build
+    needs: [build, get-version-info]
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
@@ -145,22 +168,101 @@ jobs:
       - name: Create nightly release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: nightly-${{ github.sha }}
-          name: Nightly Build - ${{ github.sha }}
-          body: "Automated nightly build from commit ${{ github.sha }}"
-          prerelease: true
+          tag_name: ${{ needs.get-version-info.outputs.tag }}
+          name: ${{ needs.get-version-info.outputs.release_name }}
+          body: ${{ needs.get-version-info.outputs.release_body }}
+          prerelease: ${{ needs.get-version-info.outputs.is_prerelease }}
           files: |
             artifacts/**/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # 开发环境部署
-  dev-deploy:
-    needs: build
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'dev'
+      - name: Update latest nightly tag
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          # 删除旧的latest-nightly标签（如果存在）
+          git tag -d latest-nightly || true
+          # 创建新的latest-nightly标签指向当前提交
+          git tag -a latest-nightly -m "Latest nightly build" ${{ github.sha }}
+          # 推送标签（强制覆盖）
+          git push origin latest-nightly --force
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 开发版本发布任务
+  dev-release:
+    needs: [build, get-version-info]
+    if: github.ref == 'refs/heads/dev' && github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
-      - name: Dev environment deployment
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create development release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.get-version-info.outputs.tag }}
+          name: ${{ needs.get-version-info.outputs.release_name }}
+          body: ${{ needs.get-version-info.outputs.release_body }}
+          prerelease: ${{ needs.get-version-info.outputs.is_prerelease }}
+          files: |
+            artifacts/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update latest dev tag
         run: |
-          echo "Deploying to development environment"
-          # 这里可以添加开发环境特定的部署步骤
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          # 删除旧的latest-dev标签（如果存在）
+          git tag -d latest-dev || true
+          # 创建新的latest-dev标签指向当前提交
+          git tag -a latest-dev -m "Latest development build" ${{ github.sha }}
+          # 推送标签（强制覆盖）
+          git push origin latest-dev --force
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 正式版本发布任务
+  prod-release:
+    needs: [build, get-version-info]
+    if: (github.ref == 'refs/heads/main' && github.event_name == 'push') || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create production release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.get-version-info.outputs.tag }}
+          name: ${{ needs.get-version-info.outputs.release_name }}
+          body: ${{ needs.get-version-info.outputs.release_body }}
+          prerelease: ${{ needs.get-version-info.outputs.is_prerelease }}
+          files: |
+            artifacts/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update latest tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          # 删除旧的latest标签（如果存在）
+          git tag -d latest || true
+          # 创建新的latest标签指向当前提交
+          git tag -a latest -m "Latest stable release" ${{ github.sha }}
+          # 推送标签（强制覆盖）
+          git push origin latest --force
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
